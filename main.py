@@ -185,7 +185,19 @@ if data_source == 'alphavantage':
         print('\tInputs: ', dat)
         print('\tOutput:', lbl)
 
-    # Continue with your predictions and plotting, etc.
+    # Initialize LSTM model parameters
+    D = 1  # Dimensionality of the data. Since your data is 1-D this would be 1
+    num_unrollings = 50  # Number of time steps you look into the future
+    batch_size = 500  # Number of samples in a batch
+    num_nodes = [200, 200, 150]  # Number of hidden nodes in each layer of the deep LSTM stack
+    n_layers = len(num_nodes)  # Number of layers in the LSTM
+    dropout = 0.2  # Dropout amount
+
+    # Reset the default TensorFlow graph to prevent overlap
+    tf.reset_default_graph()  # This is important in case you run this multiple times
+
+    # Continue with your LSTM TensorFlow model building and training from here...
+
+    # Continue with predictions, etc.
     predictions, mse_error = moving_avg_predictions(train_data, window_size=100)  # Calculate predictions
     plot_predictions(df, predictions, window_size=100, train_data=train_data)  # Visualize predictions
-
