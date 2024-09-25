@@ -1,203 +1,124 @@
-from pandas_datareader import data
-import matplotlib.pyplot as plt
-import pandas as pd
-import datetime as dt
-import urllib.request, json
 import os
+import urllib.request, json
 import numpy as np
+import pandas as pd
+import tensorflow as tf
+import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
-import tensorflow as tf  # This code has been tested with TensorFlow 1.6
 
-# Define global variables
-data_source = 'alphavantage'  # 'alphavantage' or 'kaggle'
-api_key = 'XN2NAZLJG6H6BMXY'
-ticker = "AAL"
-file_to_save = 'stock_market_data-%s.csv' % ticker
-url_string = "https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=%s&outputsize=full&apikey=%s" % (ticker, api_key)
+# Data source
+data_source = 'alphavantage'  # alphavantage or kaggle
 
-# Step 1: Load Data
-def load_data():
-    if not os.path.exists(file_to_save):
-        print("Fetching new data from Alpha Vantage API")
-        with urllib.request.urlopen(url_string) as url:
-            data = json.loads(url.read().decode())['Time Series (Daily)']
-            df = pd.DataFrame(columns=['Date', 'Low', 'High', 'Close', 'Open'])
-            for k, v in data.items():
-                date = dt.datetime.strptime(k, '%Y-%m-%d')
-                data_row = [date.date(), float(v['3. low']), float(v['2. high']),
-                            float(v['4. close']), float(v['1. open'])]
-                df.loc[-1, :] = data_row
-                df.index = df.index + 1
+# Avoid hardcoding API key, fetch it from environment variables
+api_key = os.getenv('ALPHA_VANTAGE_API_KEY', 'XN2NAZLJG6H6BMXY')
 
-        # Sort and save the data
-        df = df.sort_values('Date')
-        df.to_csv(file_to_save)
-        print(f'Data saved to : {file_to_save}')
-    else:
-        print("Loading data from existing CSV file")
-        df = pd.read_csv(file_to_save)
-    return df
-
-# Step 2: Visualize Data
-def visualize_data(df):
-    plt.figure(figsize=(18, 9))
-    plt.plot(range(df.shape[0]), (df['Low'] + df['High']) / 2.0)
-    plt.xticks(range(0, df.shape[0], 500), df['Date'].loc[::500], rotation=45)
-    plt.xlabel('Date', fontsize=18)
-    plt.ylabel('Mid Price', fontsize=18)
-    plt.show()
-
-# Step 3: Normalize and Scale Data
-def scale_data(df):
-    high_prices = df.loc[:, 'High'].values
-    low_prices = df.loc[:, 'Low'].values
-    mid_prices = (high_prices + low_prices) / 2.0
-
-    # Adjust train-test split based on available data points (80% for train, 20% for test)
-    split_ratio = 0.8
-    split_point = int(len(mid_prices) * split_ratio)
-
-    # Now split the data
-    train_data = mid_prices[:split_point]
-    test_data = mid_prices[split_point:]
-
-    # Print the shapes to verify
-    print(f"Train data size: {train_data.shape}")
-    print(f"Test data size: {test_data.shape}")
-
-    if test_data.size == 0:
-        print("Warning: test_data is empty, check your data size.")
-        return train_data, None
-
-    # Reshape the data for the scaler
-    train_data = train_data.reshape(-1, 1)
-    test_data = test_data.reshape(-1, 1)
-
-    # Normalize the training and test data using MinMaxScaler
-    scaler = MinMaxScaler()
-
-    # Fit and transform the training data
-    scaler.fit(train_data)
-    train_data = scaler.transform(train_data)
-
-    # Transform the test data
-    test_data = scaler.transform(test_data)
-
-    # Flatten the data back for further processing
-    train_data = train_data.flatten()
-    test_data = test_data.flatten()
-
-    return train_data, test_data
-
-# Step 4: Apply Exponential Moving Average Smoothing
-def apply_ema_smoothing(train_data):
-    EMA = 0.0
-    gamma = 0.1
-    for ti in range(len(train_data)):
-        EMA = gamma * train_data[ti] + (1 - gamma) * EMA
-        train_data[ti] = EMA
-    return train_data
-
-# Step 5: Calculate Moving Averages and Predictions
-def moving_avg_predictions(train_data, window_size):
-    N = train_data.size
-    predictions = []
-    mse_errors = []
-
-    for pred_idx in range(window_size, N):
-        predictions.append(np.mean(train_data[pred_idx - window_size:pred_idx]))
-        mse_errors.append((predictions[-1] - train_data[pred_idx]) ** 2)
-
-    mse_error = 0.5 * np.mean(mse_errors)
-    print(f'MSE error for standard averaging: {mse_error:.5f}')
-    return predictions, mse_error
-
-# Step 6: Visualize the Results
-def plot_predictions(df, predictions, window_size, train_data):
-    plt.figure(figsize=(18, 9))
-
-    # Plot only the portion of 'df' that corresponds to 'train_data'
-    trimmed_dates = df['Date'].iloc[:len(train_data)]
-
-    plt.plot(trimmed_dates, train_data, color='b', label='True Data')
-    plt.plot(trimmed_dates[window_size:], predictions, color='orange', label='Predictions')
-
-    plt.xlabel('Date', fontsize=18)
-    plt.ylabel('Mid Price', fontsize=18)
-    plt.legend(fontsize=18)
-    plt.xticks(rotation=45)
-    plt.show()
-
-# Data Generator Class for Sequential Data
-class DataGeneratorSeq(object):
-    def __init__(self, prices, batch_size, num_unroll):
-        self._prices = prices
-        self._prices_length = len(self._prices) - num_unroll
-        self._batch_size = batch_size
-        self._num_unroll = num_unroll
-        self._segments = self._prices_length // self._batch_size
-        self._cursor = [offset * self._segments for offset in range(self._batch_size)]
-
-    def next_batch(self):
-        batch_data = np.zeros((self._batch_size), dtype=np.float32)
-        batch_labels = np.zeros((self._batch_size), dtype=np.float32)
-
-        for b in range(self._batch_size):
-            if self._cursor[b] + 1 >= self._prices_length:
-                self._cursor[b] = np.random.randint(0, (b + 1) * self._segments)
-
-            batch_data[b] = self._prices[self._cursor[b]]
-            batch_labels[b] = self._prices[self._cursor[b] + np.random.randint(0, 5)]
-
-            self._cursor[b] = (self._cursor[b] + 1) % self._prices_length
-
-        return batch_data, batch_labels
-
-    def unroll_batches(self):
-        unroll_data, unroll_labels = [], []
-        for ui in range(self._num_unroll):
-            data, labels = self.next_batch()
-            unroll_data.append(data)
-            unroll_labels.append(labels)
-
-        return unroll_data, unroll_labels
-
-    def reset_indices(self):
-        for b in range(self._batch_size):
-            self._cursor[b] = np.random.randint(0, min((b + 1) * self._segments, self._prices_length - 1))
-
-# Main Execution Flow
 if data_source == 'alphavantage':
-    df = load_data()  # Load the data
-    visualize_data(df)  # Initial visualization
-    train_data, test_data = scale_data(df)  # Scaling and normalization
-    train_data = apply_ema_smoothing(train_data)  # Apply EMA smoothing
+    # ====================== Loading Data from Alpha Vantage ==================================
+    ticker = "AAPL"
+    url_string = f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol={ticker}&outputsize=full&apikey={api_key}"
+    # Save data to this file
+    file_to_save = f'stock_market_data-{ticker}.csv'
 
-    # Initialize Data Generator for sequential batches
-    dg = DataGeneratorSeq(train_data, batch_size=5, num_unroll=5)
+    df = pd.read_csv(f'stock_market_data-{ticker}.csv')  # Load your stock data
+    data = df['Close'].values  # Use the 'Close' price for prediction
 
-    # Unroll batches for further use
-    u_data, u_labels = dg.unroll_batches()
+    # Fetch the stock data from the URL
+    with urllib.request.urlopen(url_string) as url:
+        data = json.loads(url.read().decode())
 
-    # Debugging: Print unrolled data
-    for ui, (dat, lbl) in enumerate(zip(u_data, u_labels)):
-        print(f'\n\nUnrolled index {ui}')
-        print('\tInputs: ', dat)
-        print('\tOutput:', lbl)
+    # Extract the "Time Series (Daily)" data from the JSON
+    time_series = data['Time Series (Daily)']
 
-    # Initialize LSTM model parameters
-    D = 1  # Dimensionality of the data. Since your data is 1-D this would be 1
-    num_unrollings = 50  # Number of time steps you look into the future
-    batch_size = 500  # Number of samples in a batch
-    num_nodes = [200, 200, 150]  # Number of hidden nodes in each layer of the deep LSTM stack
-    n_layers = len(num_nodes)  # Number of layers in the LSTM
-    dropout = 0.2  # Dropout amount
+    # Convert the nested JSON data into a Pandas DataFrame
+    df = pd.DataFrame.from_dict(time_series, orient='index')
 
-    # Reset the default TensorFlow graph to prevent overlap
-    tf.reset_default_graph()  # This is important in case you run this multiple times
+    # Convert the index to a datetime object (the index contains the dates)
+    df.index = pd.to_datetime(df.index)
 
-    # Continue with your LSTM TensorFlow model building and training from here...
+    # Rename the columns to more descriptive names
+    df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
 
-    # Continue with predictions, etc.
-    predictions, mse_error = moving_avg_predictions(train_data, window_size=100)  # Calculate predictions
-    plot_predictions(df, predictions, window_size=100, train_data=train_data)  # Visualize predictions
+    # Convert columns to numeric types (they are initially strings)
+    df = df.apply(pd.to_numeric)
+
+    # Use the last 5 years of data (or adjust based on your needs)
+    df = df[['Open', 'High', 'Low', 'Close']]  # We only need OHLC for prediction
+    df = df.iloc[::-1]  # Reverse the DataFrame to have the latest data at the bottom
+
+    # Continue with your code from here:
+
+    # Convert the OHLC prices to a NumPy array
+    data = df.values  # Use OHLC prices
+
+    # Scale the data to be between 0 and 1
+    scaler = MinMaxScaler(feature_range=(0, 1))
+    scaled_data = scaler.fit_transform(data)
+
+    # Create sequences of past 60 days to predict the OHLC for the next day
+    def create_sequences(data, time_steps):
+        x, y = [], []
+        for i in range(len(data) - time_steps):
+            x.append(data[i:i + time_steps])  # past 'time_steps' days as input
+            y.append(data[i + time_steps])  # next day OHLC as target
+        return np.array(x), np.array(y)
+
+
+    time_steps = 60  # Use the last 60 days of past data to predict the next day
+    x_data, y_data = create_sequences(scaled_data, time_steps)
+
+    # Split into training and test sets (e.g., 80% training, 20% test)
+    split = int(0.8 * len(x_data))
+    x_train, y_train = x_data[:split], y_data[:split]
+    x_test, y_test = x_data[split:], y_data[split:]
+
+    # Reshape the data to fit LSTM input format (samples, time steps, features)
+    x_train = np.reshape(x_train, (x_train.shape[0], x_train.shape[1], 4))  # 4 features (OHLC)
+    x_test = np.reshape(x_test, (x_test.shape[0], x_test.shape[1], 4))
+
+    print(f"Training data shape: {x_train.shape}")
+    print(f"Test data shape: {x_test.shape}")
+
+    # Build the LSTM model
+    model = tf.keras.Sequential()
+
+    # Add an LSTM layer
+    model.add(tf.keras.layers.LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], 4)))
+    model.add(tf.keras.layers.LSTM(units=50))  # Another LSTM layer
+    model.add(tf.keras.layers.Dense(4))  # Output layer to predict 4 values (Open, High, Low, Close)
+
+    # Compile the model
+    model.compile(optimizer='adam', loss='mean_squared_error')
+
+    # Train the model
+    model.fit(x_train, y_train, epochs=10, batch_size=32)
+
+    # Evaluate the model on the test set
+    test_loss = model.evaluate(x_test, y_test)
+    print(f"Test Loss: {test_loss}")
+
+    # Predict future OHLC stock prices
+    predicted_stock_price = model.predict(x_test)
+
+    # Inverse transform to get the actual prices
+    predicted_stock_price = scaler.inverse_transform(predicted_stock_price)
+
+    # Inverse transform the actual test prices
+    real_stock_price = scaler.inverse_transform(y_test)
+
+    # Plot the results to compare
+    plt.plot(real_stock_price[:, 3], color='red', label='Real AAPL Close Price')  # Only plot 'Close' prices
+    plt.plot(predicted_stock_price[:, 3], color='blue', label='Predicted AAPL Close Price')  # Only plot 'Close' prices
+    plt.title('AAPL Stock Price Prediction (Close Price)')
+    plt.xlabel('Time')
+    plt.ylabel('Stock Price')
+    plt.legend()
+    plt.show()
+
+    # Predict the next OHLC values based on the last 60 days in the test set
+    last_60_days = scaled_data[-60:]  # Get the last 60 days from your dataset
+    last_60_days = last_60_days.reshape(1, -1, 4)  # Reshape to fit the LSTM input
+
+    predicted_next_price = model.predict(last_60_days)
+    predicted_next_price = scaler.inverse_transform(predicted_next_price)
+
+    print(f"Predicted Next Day's Open, High, Low, and Close: {predicted_next_price[0]}")
