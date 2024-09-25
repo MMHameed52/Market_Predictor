@@ -86,7 +86,7 @@ if st.button('Predict Stock Price'):
         model.compile(optimizer='adam', loss='mean_squared_error')
 
         # Train the model
-        model.fit(x_train, y_train, epochs=10, batch_size=64)  # Lowered epochs for quick testing
+        model.fit(x_train, y_train, epochs=50, batch_size=64)  # Lowered epochs for quick testing
 
         # Evaluate the model on the test set
         test_loss = model.evaluate(x_test, y_test)
